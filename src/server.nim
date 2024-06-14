@@ -238,10 +238,13 @@ serve "127.0.0.1", 5000:
 
   get "/identities":
     serverCtx.validateAccount(headers).ifOk(account, error):
-      var identityJList = newJArray()
+      let identityJList = newJArray()
       for identity in account.identities:
         # TODO: Expose the communities an identity is part of
-        identityJList.add(%* { "id": $identity.identityId.Oid, "name": $identity.name })
+        let communityJList = newJArray()
+        for community in identity.memberOf:
+          communityJList.add(%* { "id": $community.communityId.Oid, "name": $community.name })
+        identityJList.add(%* { "id": $identity.identityId.Oid, "name": $identity.name, "communities": communityJList })
       return %* { "identities": identityJList }
     do:
       statusCode = error.statusCode

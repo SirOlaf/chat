@@ -134,4 +134,10 @@ proc main() {.async.} =
     echo resp.code()
     echo await resp.body()
 
+  block:
+    echo "Listing identities"
+    let resp = await client.sendListIdentities()
+    echo resp.code()
+    echo await resp.body()
+
 waitFor main()
