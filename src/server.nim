@@ -240,7 +240,6 @@ serve "127.0.0.1", 5000:
     serverCtx.validateAccount(headers).ifOk(account, error):
       let identityJList = newJArray()
       for identity in account.identities:
-        # TODO: Expose the communities an identity is part of
         let communityJList = newJArray()
         for community in identity.memberOf:
           communityJList.add(%* { "id": $community.communityId.Oid, "name": $community.name })
