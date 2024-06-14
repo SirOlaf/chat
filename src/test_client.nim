@@ -16,6 +16,7 @@ import results
 type
   IdentityId = distinct string
   CommunityId = distinct string
+  ChannelId = distinct string
 
 
 const baseAddr = "http://127.0.0.1:5000/"
@@ -33,10 +34,25 @@ proc sendListIdentities(client: AsyncHttpClient): Future[AsyncResponse] {.async.
 
 
 proc sendCreateCommunity(client: AsyncHttpClient, identity: IdentityId, name: string): Future[AsyncResponse] {.async.} =
-  await client.post(baseAddr & "create_community", body = $(%* {"identity": identity.string, "name": name}))
+  client.headers["Identity"] = identity.string
+  await client.post(baseAddr & "create_community", body = $(%* {"name": name}))
 
 proc sendCreateChannel(client: AsyncHttpClient, community: CommunityId, identity: IdentityId, name: string): Future[AsyncResponse] {.async.} =
-  await client.post(baseAddr & "community/" & community.string & "/create_channel", body = $(%* { "identity": identity.string, "name": name }))
+  client.headers["Identity"] = identity.string
+  await client.post(baseAddr & "community/" & community.string & "/create_channel", body = $(%* { "name": name }))
+
+proc sendChannelMessage(client: AsyncHttpClient, community: CommunityId, channel: ChannelId, identity: IdentityId, contents: string): Future[AsyncResponse] {.async.} =
+  client.headers["Identity"] = identity.string
+  await client.post(
+    baseAddr & "community/" & community.string & "/channels/" & channel.string & "/posts",
+    body = $(%* {"contents": contents})
+  )
+
+proc getLatestChannelMessages(client: AsyncHttpClient, community: CommunityId, channel: ChannelId, identity: IdentityId): Future[AsyncResponse] {.async.} =
+  client.headers["Identity"] = identity.string
+  await client.get(
+    baseAddr & "community/" & community.string & "/channels/" & channel.string & "/posts/latest",
+  )
 
 
 
@@ -157,15 +173,30 @@ proc main() {.async.} =
     echo resp.code()
     echo await resp.body()
 
-  block:
+  let channelId = block:
     echo "Creating a channel"
     let resp = await client.sendCreateChannel(communityId, testIdentity, "test channel")
     echo resp.code()
-    echo await resp.body()
+    let body = await resp.body()
+    echo body
+    let payload = body.parseJson()
+    payload["id"].getStr().ChannelId
 
   block:
     echo "Trying to create a channel as non owner"
     let resp = await client.sendCreateChannel(communityId, otherIdentity, "test channel")
+    echo resp.code()
+    echo await resp.body()
+
+  block:
+    echo "Sending a message"
+    let resp = await client.sendChannelMessage(communityId, channelId, testIdentity, "Test message")
+    echo resp.code()
+    echo await resp.body()
+
+  block:
+    echo "Requesting latest messages from test channel"
+    let resp = await client.getLatestChannelMessages(communityId, channelId, testIdentity)
     echo resp.code()
     echo await resp.body()
 

@@ -19,6 +19,7 @@ import results
 # TODO: use actual cryptographic stuff
 # TODO: Prevent race conditions
 # TODO: Replace Oid with a snowflake/token depending on usage
+# TODO: Message encryption?
 type
   PublicName = distinct string
 
@@ -39,7 +40,7 @@ type
   Channel = ref object
     channelId: ChannelId
     name: PublicName
-    messages: seq[Post]
+    posts: seq[Post]
 
   # TODO: Add another layer for Identity + CommunityMember to support nicknames
   IdentityId = distinct Oid
@@ -85,19 +86,30 @@ proc `$`(x: PublicName): string = x.string
 
 proc `==`(a, b: CommunityId): bool {.borrow.}
 
+proc `==`(a, b: ChannelId): bool {.borrow.}
 
 
-template errUnauthorized(): untyped =
-  err ApiErr(
+proc getErrUnauthorized(): ApiErr {.inline.} =
+  ApiErr(
     statusCode : 401,
-    message : "Unauthorized"
+    message : "Unauthorized",
   )
 
-template errBadData(messageStr: string): untyped =
-  err ApiErr(
+proc getErrNotFound(): ApiErr {.inline.} =
+  ApiErr(
+    statusCode : 404,
+    message : "Not found",
+  )
+
+proc getErrBadData(messageStr: string): ApiErr {.inline.} =
+  ApiErr(
     statusCode : 422,
     message : messageStr,
   )
+
+template errUnauthorized(): untyped = err getErrUnauthorized()
+template errNotFound(): untyped = err getErrNotFound()
+template errBadData(messageStr: string): untyped = err getErrBadData(messageStr)
 
 
 
@@ -115,7 +127,7 @@ proc createChannel(permissionHandle: sink PermissionHandle, community: Community
   let channel = Channel(
     channelId : genOid().ChannelId,
     name : name,
-    messages : @[]
+    posts : @[]
   )
   # FIXME: race condition
   community.channels.add(channel)
@@ -144,6 +156,17 @@ proc validateIdentity(account: Account, identityId: IdentityId): Result[Identity
       return ok(identity)
   errUnauthorized()
 
+proc validateIdentity(server: ServerCtx, headers: HttpHeaders): Result[Identity, ApiErr] =
+  const identityHeaderKey = "Identity"
+  if not headers.hasKey(identityHeaderKey):
+    errUnauthorized()
+  else:
+    server.validateAccount(headers).ifOk(account, error):
+      let identityId = headers[identityHeaderKey].`$`.cstring.parseOid().IdentityId
+      account.validateIdentity(identityId)
+    do:
+      err error
+
 proc validateCommunity(identity: Identity, communityId: CommunityId): Result[Community, ApiErr] =
   for community in identity.memberOf:
     if community.communityId == communityId:
@@ -155,6 +178,13 @@ proc validateModerationPermissions(community: Community, identity: Identity): Re
   if community.owner.identityId == identity.identityId:
     return ok PermissionHandle()
   errUnauthorized()
+
+# TODO: Restrict view based on badges once they exist
+proc validateChannel(community: Community, channelId: ChannelId): Result[Channel, ApiErr] =
+  for channel in community.channels:
+    if channel.channelId == channelId:
+      return ok channel
+  errNotFound()
 
 
 proc validateName(name: string): Result[PublicName, ApiErr] =
@@ -169,6 +199,14 @@ proc validateName(name: string): Result[PublicName, ApiErr] =
     errBadData("Name must be at most " & $maxLen & " characters long.")
   else:
     ok(name.PublicName)
+
+
+proc toJson(x: Post): JsonNode =
+  %* {
+    "id": $x.postId.Oid,
+    "author": $x.author.identityId.Oid,
+    "contents": x.contents,
+  }
 
 
 # TODO: Validate json payload structurally
@@ -192,31 +230,25 @@ serve "127.0.0.1", 5000:
     return %* { "token": $accountToken.Oid, "id": $account.accountId.Oid}
 
   post "/create_community":
-    serverCtx.validateAccount(headers).ifOk(account, error):
+    serverCtx.validateIdentity(headers).ifOk(identity, error):
       # FIXME
-      let
-        payload = req.body.parseJson()
-        identityId = payload["identity"].getStr().cstring.parseOid().IdentityId()
-      account.validateIdentity(identityId).ifOk(identity, error):
-        validateName(payload["name"].getStr()).ifOk(name, error):
-          when defined(debug):
-            echo "Creating community"
-            echo "Name: ", name
-            echo "Owner: ", identity.name, " | ", identity.identityId.Oid
-          let community = Community(
-            communityId : genOid().CommunityId,
-            name : name,
-            owner : identity,
-            members : @[identity],
-            channels : @[],
-          )
-          # FIXME: race conditions
-          identity.memberOf.add(community)
-          serverCtx.communities.add(community)
-          return %* { "name": name.string, "id": $community.communityId.Oid, "owner": $identity.identityId.Oid }
-        do:
-          statusCode = error.statusCode
-          return error.message
+      let payload = req.body.parseJson()
+      validateName(payload["name"].getStr()).ifOk(name, error):
+        when defined(debug):
+          echo "Creating community"
+          echo "Name: ", name
+          echo "Owner: ", identity.name, " | ", identity.identityId.Oid
+        let community = Community(
+          communityId : genOid().CommunityId,
+          name : name,
+          owner : identity,
+          members : @[identity],
+          channels : @[],
+        )
+        # FIXME: race conditions
+        identity.memberOf.add(community)
+        serverCtx.communities.add(community)
+        return %* { "name": name.string, "id": $community.communityId.Oid, "owner": $identity.identityId.Oid }
       do:
         statusCode = error.statusCode
         return error.message
@@ -252,6 +284,7 @@ serve "127.0.0.1", 5000:
         payload = req.body.parseJson()
         identityId = payload["id"].getStr().cstring.parseOid().IdentityId
       # FIXME: race condition
+      # TODO: Prevent deleting an identity that own communities
       for i in countdown(account.identities.len() - 1, 0):
         let identity = account.identities[i]
         if identity.identityId == identityId:
@@ -279,20 +312,14 @@ serve "127.0.0.1", 5000:
 
   # community
   post "/community/{communityId:string}/create_channel":
-    serverCtx.validateAccount(headers).ifOk(account, error):
-      # FIXME
-      let
-        payload = req.body.parseJson()
-        identityId = payload["identity"].getStr().cstring.parseOid().IdentityId()
+    # FIXME
+    serverCtx.validateIdentity(headers).ifOk(identity, error):
+      let payload = req.body.parseJson()
       payload["name"].getStr().validateName().ifOk(name, error):
-        account.validateIdentity(identityId).ifOk(identity, error):
-          identity.validateCommunity(communityId.cstring.parseOid().CommunityId).ifOk(community, error):
-            community.validateModerationPermissions(identity).ifOk(permissionHandle, error):
-              let channel = permissionHandle.createChannel(community, name)
-              return %* { "name": name.string, "id": $channel.channelId.Oid }
-            do:
-              statusCode = error.statusCode
-              return error.message
+        identity.validateCommunity(communityId.cstring.parseOid().CommunityId).ifOk(community, error):
+          community.validateModerationPermissions(identity).ifOk(permissionHandle, error):
+            let channel = permissionHandle.createChannel(community, name)
+            return %* { "name": name.string, "id": $channel.channelId.Oid }
           do:
             statusCode = error.statusCode
             return error.message
@@ -306,8 +333,33 @@ serve "127.0.0.1", 5000:
       statusCode = error.statusCode
       return error.message
 
-  post "/community/{communityId:string}/channel/{channelId:string}/send_message":
-    discard
+  post "/community/{communityId:string}/channels/{channelId:string}/posts":
+    serverCtx.validateIdentity(headers).ifOk(identity, error):
+      # FIXME
+      let
+        payload = req.body.parseJson()
+        # TODO: Non string message contents (embeds/images), restrict message length, sanitize
+        messageContents = payload["contents"].getStr()
+      identity.validateCommunity(communityId.cstring.parseOid().CommunityId).ifOk(community, error):
+        community.validateChannel(channelId.cstring.parseOid().ChannelId).ifOk(channel, error):
+          # FIXME: race condition
+          let post = Post(
+            postId : genOid().PostId,
+            author : identity,
+            contents : messageContents,
+          )
+          channel.posts.add(post)
+          return post.toJson()
+        do:
+          statusCode = error.statusCode
+          return error.message
+      do:
+        statusCode = error.statusCode
+        return error.message
+    do:
+      statusCode = error.statusCode
+      return error.message
+
 
   delete "/community/{communityId:string}":
     discard
@@ -327,8 +379,30 @@ serve "127.0.0.1", 5000:
   get "/community/{communityId:string}/channels/":
     discard
 
+  get "/community/{communityId:string}/channels/{channelId:string}/posts/latest":
+    ## Get at most 20 most recent posts
+    serverCtx.validateIdentity(headers).ifOk(identity, error):
+      identity.validateCommunity(communityId.cstring.parseOid().CommunityId).ifOk(community, error):
+        community.validateChannel(channelId.cstring.parseOid().ChannelId).ifOk(channel, error):
+          let postsJList = newJArray()
+          for i in 0 ..< min(20, channel.posts.len()):
+            postsJList.add(channel.posts[channel.posts.len() - i - 1].toJson())
+          return %* { "posts": postsJList }
+        do:
+          statusCode = error.statusCode
+          return error.message
+      do:
+        statusCode = error.statusCode
+        return error.message
+    do:
+      statusCode = error.statusCode
+      return error.message
+
+
   get "/community/{communityId:string}/channels/{channelId:string}/posts/before/{postId:string}":
+    ## get at most 20 posts before postId
     discard
 
   get "/community/{communityId:string}/channels/{channelId:string}/posts/after/{postId:string}":
+    ## get at most 20 posts after postId
     discard
