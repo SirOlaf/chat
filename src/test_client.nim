@@ -13,7 +13,9 @@ import results
 {.experimental: "inferGenericTypes".}
 
 
-type IdentityId = distinct string
+type
+  IdentityId = distinct string
+  CommunityId = distinct string
 
 
 const baseAddr = "http://127.0.0.1:5000/"
@@ -32,6 +34,9 @@ proc sendListIdentities(client: AsyncHttpClient): Future[AsyncResponse] {.async.
 
 proc sendCreateCommunity(client: AsyncHttpClient, identity: IdentityId, name: string): Future[AsyncResponse] {.async.} =
   await client.post(baseAddr & "create_community", body = $(%* {"identity": identity.string, "name": name}))
+
+proc sendCreateChannel(client: AsyncHttpClient, community: CommunityId, identity: IdentityId, name: string): Future[AsyncResponse] {.async.} =
+  await client.post(baseAddr & "community/" & community.string & "/create_channel", body = $(%* { "identity": identity.string, "name": name }))
 
 
 
@@ -94,6 +99,15 @@ proc main() {.async.} =
     echo resp.code()
     echo await resp.body()
 
+  let otherIdentity = block:
+    echo "Creating identity again: 'sirolaf'"
+    let resp = await client.sendCreateIdentity("sirolaf")
+    echo resp.code()
+    let body = await resp.body()
+    echo body
+    let payload = body.parseJson()
+    payload["id"].getStr().IdentityId
+
   block:
     echo "Trying to send an empty identity name"
     let resp = await client.sendCreateIdentity("")
@@ -128,15 +142,30 @@ proc main() {.async.} =
     echo resp.code()
     echo await resp.body()
 
-  block:
+  let communityId = block:
     echo "Creating a community"
     let resp = await client.sendCreateCommunity(testIdentity, "test community")
     echo resp.code()
-    echo await resp.body()
+    let body = await resp.body()
+    echo body
+    let payload = body.parseJson()
+    payload["id"].getStr().CommunityId
 
   block:
     echo "Listing identities"
     let resp = await client.sendListIdentities()
+    echo resp.code()
+    echo await resp.body()
+
+  block:
+    echo "Creating a channel"
+    let resp = await client.sendCreateChannel(communityId, testIdentity, "test channel")
+    echo resp.code()
+    echo await resp.body()
+
+  block:
+    echo "Trying to create a channel as non owner"
+    let resp = await client.sendCreateChannel(communityId, otherIdentity, "test channel")
     echo resp.code()
     echo await resp.body()
 

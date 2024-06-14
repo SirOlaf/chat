@@ -35,7 +35,9 @@ type
     author: Identity
     contents: string
 
+  ChannelId = distinct Oid
   Channel = ref object
+    channelId: ChannelId
     name: PublicName
     messages: seq[Post]
 
@@ -55,6 +57,10 @@ type
     members: seq[Identity]
     channels: seq[Channel]
 
+  PermissionHandle = object
+    ## For internal use to ensure proper use of api.
+    ## Prevents access to resources that shouldn't be accessed.
+
   ApiErr = object
     statusCode: int
     message: string
@@ -65,12 +71,19 @@ type
     communities: seq[Community]
 
 
+# TODO: Make use of this once closure iterators are fixes, if ever
+# Copying permissions is an error. They must be consumed
+#proc `=copy`*(a: var PermissionHandle, b: PermissionHandle) {.error.}
+
+
 proc hash(x: AccountAuthToken): Hash {.borrow.}
 proc `==`(a, b: AccountAuthToken): bool {.borrow.}
 
 proc `==`(a, b: IdentityId): bool {.borrow.}
 
 proc `$`(x: PublicName): string = x.string
+
+proc `==`(a, b: CommunityId): bool {.borrow.}
 
 
 
@@ -88,7 +101,7 @@ template errBadData(messageStr: string): untyped =
 
 
 
-proc createAccount*(server: ServerCtx): tuple[account: Account, token: AccountAuthToken] =
+proc createAccount(server: ServerCtx): tuple[account: Account, token: AccountAuthToken] =
   let token = genOid().AccountAuthToken
   let account = Account(
     accountId : genOid().AccountId,
@@ -98,15 +111,16 @@ proc createAccount*(server: ServerCtx): tuple[account: Account, token: AccountAu
   server.registeredTokens[token] = account
   (account : account, token : token)
 
+proc createChannel(permissionHandle: sink PermissionHandle, community: Community, name: PublicName): Channel =
+  let channel = Channel(
+    channelId : genOid().ChannelId,
+    name : name,
+    messages : @[]
+  )
+  # FIXME: race condition
+  community.channels.add(channel)
+  channel
 
-template checkToken(server: ServerCtx, authToken: AccountAuthToken): untyped =
-  if authToken notin server.registeredTokens:
-    return errUnauthorized()
-
-template withAccountAuth(server: ServerCtx, authToken: AccountAuthToken, accVar: untyped, body: untyped): untyped =
-  server.checkToken(authToken)
-  let accVar {.inject.} = server.registeredTokens[authToken]
-  body
 
 
 proc getAuthToken(headers: HttpHeaders): Result[AccountAuthToken, ApiErr] =
@@ -129,6 +143,19 @@ proc validateIdentity(account: Account, identityId: IdentityId): Result[Identity
     if identity.identityId == identityId:
       return ok(identity)
   errUnauthorized()
+
+proc validateCommunity(identity: Identity, communityId: CommunityId): Result[Community, ApiErr] =
+  for community in identity.memberOf:
+    if community.communityId == communityId:
+      return ok community
+  errUnauthorized()
+
+proc validateModerationPermissions(community: Community, identity: Identity): Result[PermissionHandle, ApiErr] =
+  # TODO: Support for roles and actions once they are added
+  if community.owner.identityId == identity.identityId:
+    return ok PermissionHandle()
+  errUnauthorized()
+
 
 proc validateName(name: string): Result[PublicName, ApiErr] =
   const maxLen = 32
@@ -252,7 +279,32 @@ serve "127.0.0.1", 5000:
 
   # community
   post "/community/{communityId:string}/create_channel":
-    discard
+    serverCtx.validateAccount(headers).ifOk(account, error):
+      # FIXME
+      let
+        payload = req.body.parseJson()
+        identityId = payload["identity"].getStr().cstring.parseOid().IdentityId()
+      payload["name"].getStr().validateName().ifOk(name, error):
+        account.validateIdentity(identityId).ifOk(identity, error):
+          identity.validateCommunity(communityId.cstring.parseOid().CommunityId).ifOk(community, error):
+            community.validateModerationPermissions(identity).ifOk(permissionHandle, error):
+              let channel = permissionHandle.createChannel(community, name)
+              return %* { "name": name.string, "id": $channel.channelId.Oid }
+            do:
+              statusCode = error.statusCode
+              return error.message
+          do:
+            statusCode = error.statusCode
+            return error.message
+        do:
+          statusCode = error.statusCode
+          return error.message
+      do:
+        statusCode = error.statusCode
+        return error.message
+    do:
+      statusCode = error.statusCode
+      return error.message
 
   post "/community/{communityId:string}/channel/{channelId:string}/send_message":
     discard
