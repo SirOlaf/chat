@@ -220,4 +220,16 @@ proc main() {.async.} =
     echo resp.code()
     echo await resp.body()
 
+  block:
+    echo "Attempting to delete an identity that owns communities"
+    let resp = await client.sendDeleteIdentity(testIdentity)
+    echo resp.code()
+    echo await resp.body()
+
+  block:
+    echo "Listing identities"
+    let resp = await client.sendListIdentities()
+    echo resp.code()
+    echo await resp.body()
+
 waitFor main()

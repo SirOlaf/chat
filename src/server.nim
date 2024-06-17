@@ -284,10 +284,21 @@ serve "127.0.0.1", 5000:
         payload = req.body.parseJson()
         identityId = payload["id"].getStr().cstring.parseOid().IdentityId
       # FIXME: race condition
-      # TODO: Prevent deleting an identity that own communities
       for i in countdown(account.identities.len() - 1, 0):
         let identity = account.identities[i]
         if identity.identityId == identityId:
+          for community in identity.memberOf:
+            if community.owner.identityId == identity.identityId:
+              statusCode = 422
+              # TODO: Provide a way to tell which communities an identity owns
+              return "This identity owns at least one community and cannot be deleted"
+          # TODO: must iterate twice for now to ensure clean deletion
+          # delete the identity from every community it's in
+          for community in identity.memberOf:
+            for j in countdown(community.members.len() - 1, 0):
+              if community.members[j].identityId == identity.identityId:
+                community.members.del(j)
+                break # done with this community
           account.identities.del(i)
           return ""
       statusCode = 404
