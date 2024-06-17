@@ -62,6 +62,9 @@ proc getLatestChannelMessages(client: AsyncHttpClient, community: CommunityId, c
     baseAddr & "community/" & community.string & "/channels/" & channel.string & "/posts/latest",
   )
 
+proc lookupIdentityById(client: AsyncHttpClient, targetId: Identityid): Future[AsyncResponse] {.async.} =
+  await client.get(baseAddr & "identity_info/" & targetId.string)
+
 
 
 proc main() {.async.} =
@@ -229,6 +232,24 @@ proc main() {.async.} =
   block:
     echo "Listing identities"
     let resp = await client.sendListIdentities()
+    echo resp.code()
+    echo await resp.body()
+
+  block:
+    echo "Looking up own identity by id"
+    let resp = await client.lookupIdentityById(testIdentity)
+    echo resp.code()
+    echo await resp.body()
+
+  block:
+    echo "Looking up other identity by id"
+    let resp = await client.lookupIdentityById(otherIdentity)
+    echo resp.code()
+    echo await resp.body()
+
+  block:
+    echo "Looking up an identity that doesn't exist"
+    let resp = await client.lookupIdentityById(IdentityId("badid"))
     echo resp.code()
     echo await resp.body()
 

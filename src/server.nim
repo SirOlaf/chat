@@ -208,6 +208,12 @@ proc toJson(x: Post): JsonNode =
     "contents": x.contents,
   }
 
+proc toJsonPublic(x: Identity): JsonNode =
+  %* {
+    "id": $x.identityId.Oid,
+    "name": $x.name,
+  }
+
 
 # TODO: Validate json payload structurally
 
@@ -320,6 +326,20 @@ serve "127.0.0.1", 5000:
       statusCode = error.statusCode
       return error.message
 
+  get "/identity_info/{identityId:string}":
+    serverCtx.validateAccount(headers).ifOk(account, error):
+      # TODO: Too dangerous and way too slow, but good enough for now
+      let targetId = identityId.parseOid().IdentityId
+      for registeredAcc in serverCtx.registeredTokens.values():
+        for registeredIdentity in registeredAcc.identities:
+          if registeredIdentity.identityId == targetId:
+            return registeredIdentity.toJsonPublic()
+      statusCode = 404
+      return "Unable to find the specified identity"
+    do:
+      statusCode = error.statusCode
+      return error.message
+
 
   # community
   post "/community/{communityId:string}/create_channel":
@@ -386,10 +406,7 @@ serve "127.0.0.1", 5000:
       identity.validateCommunity(communityId.cstring.parseOid().CommunityId).ifOk(community, error):
         let membersJArray = newJArray()
         for member in community.members:
-          membersJArray.add(%* {
-            "id": $member.identityId.Oid,
-            "name": $member.name
-          })
+          membersJArray.add(member.toJsonPublic())
         return %* { "members": membersJArray }
       do:
         statusCode = error.statusCode
@@ -397,9 +414,6 @@ serve "127.0.0.1", 5000:
     do:
       statusCode = error.statusCode
       return error.message
-
-  get "/community/{communityId:string}/members/{identityId:string}":
-    discard
 
   get "/community/{communityId:string}/channels":
     serverCtx.validateIdentity(headers).ifOk(identity, error):
