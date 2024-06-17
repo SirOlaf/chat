@@ -329,7 +329,7 @@ serve "127.0.0.1", 5000:
   get "/identity_info/{identityId:string}":
     serverCtx.validateAccount(headers).ifOk(account, error):
       # TODO: Too dangerous and way too slow, but good enough for now
-      let targetId = identityId.parseOid().IdentityId
+      let targetId = identityId.cstring.parseOid().IdentityId
       for registeredAcc in serverCtx.registeredTokens.values():
         for registeredIdentity in registeredAcc.identities:
           if registeredIdentity.identityId == targetId:
