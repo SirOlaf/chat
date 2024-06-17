@@ -371,7 +371,21 @@ serve "127.0.0.1", 5000:
     discard
 
   get "/community/{communityId:string}/members":
-    discard
+    serverCtx.validateIdentity(headers).ifOk(identity, error):
+      identity.validateCommunity(communityId.cstring.parseOid().CommunityId).ifOk(community, error):
+        let membersJArray = newJArray()
+        for member in community.members:
+          membersJArray.add(%* {
+            "id": $member.identityId.Oid,
+            "name": $member.name
+          })
+        return %* { "members": membersJArray }
+      do:
+        statusCode = error.statusCode
+        return error.message
+    do:
+      statusCode = error.statusCode
+      return error.message
 
   get "/community/{communityId:string}/members/{identityId:string}":
     discard

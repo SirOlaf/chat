@@ -45,6 +45,10 @@ proc getChannels(client: AsyncHttpClient, community: CommunityId, identity: Iden
   client.headers["Identity"] = identity.string
   await client.get(baseAddr & "community/" & community.string & "/channels")
 
+proc getMembers(client: AsyncHttpClient, community: CommunityId, identity: IdentityId): Future[AsyncResponse] {.async.} =
+  client.headers["Identity"] = identity.string
+  await client.get(baseAddr & "community/" & community.string & "/members")
+
 proc sendChannelMessage(client: AsyncHttpClient, community: CommunityId, channel: ChannelId, identity: IdentityId, contents: string): Future[AsyncResponse] {.async.} =
   client.headers["Identity"] = identity.string
   await client.post(
@@ -207,6 +211,12 @@ proc main() {.async.} =
   block:
     echo "Requesting channel list"
     let resp = await client.getChannels(communityId, testIdentity)
+    echo resp.code()
+    echo await resp.body()
+
+  block:
+    echo "Requesting members list"
+    let resp = await client.getMembers(communityId, testIdentity)
     echo resp.code()
     echo await resp.body()
 
