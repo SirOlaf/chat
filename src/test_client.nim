@@ -67,6 +67,13 @@ proc lookupIdentityById(client: AsyncHttpClient, targetId: Identityid): Future[A
 
 
 
+template doBasic(message: string, action: Future[AsyncResponse]): untyped =
+  echo message
+  let resp = await action
+  echo resp.code()
+  echo await resp.body
+
+
 proc main() {.async.} =
   let client = newAsyncHttpClient()
   let loginToken = block:
@@ -80,11 +87,8 @@ proc main() {.async.} =
   echo "Registered token: " & loginToken
 
   client.headers["Authorization"] = loginToken
-  block:
-    echo "Creating identity: 'chatmaster'"
-    let resp = await client.sendCreateIdentity("chatmaster")
-    echo resp.code()
-    echo await resp.body
+
+  doBasic "Creating identity: 'chatmaster'", client.sendCreateIdentity("chatmaster")
 
   let identityToDelete = block:
     echo "Creating identity: 'sirolaf'"
@@ -96,35 +100,13 @@ proc main() {.async.} =
     payload["id"].getStr().IdentityId
 
 
-  block:
-    echo "Listing identities"
-    let resp = await client.sendListIdentities()
-    echo resp.code()
-    echo await resp.body()
+  doBasic "Listing identities", client.sendListIdentities()
 
-  block:
-    echo "Deleting identity 'sirolaf'"
-    let resp = await client.sendDeleteIdentity(identityToDelete)
-    echo resp.code()
-    echo await resp.body()
+  doBasic "Deleting identity 'sirolaf'", client.sendDeleteIdentity(identityToDelete)
+  doBasic "Listing identities", client.sendListIdentities()
 
-  block:
-    echo "Listing identities"
-    let resp = await client.sendListIdentities()
-    echo resp.code()
-    echo await resp.body()
-
-  block:
-    echo "Trying to delete the same identity again"
-    let resp = await client.sendDeleteIdentity(identityToDelete)
-    echo resp.code()
-    echo await resp.body()
-
-  block:
-    echo "Listing identities"
-    let resp = await client.sendListIdentities()
-    echo resp.code()
-    echo await resp.body()
+  doBasic "Trying to delete the same identity again", client.sendDeleteIdentity(identityToDelete)
+  doBasic "Listing identities", client.sendListIdentities()
 
   let otherIdentity = block:
     echo "Creating identity again: 'sirolaf'"
@@ -135,23 +117,9 @@ proc main() {.async.} =
     let payload = body.parseJson()
     payload["id"].getStr().IdentityId
 
-  block:
-    echo "Trying to send an empty identity name"
-    let resp = await client.sendCreateIdentity("")
-    echo resp.code()
-    echo await resp.body()
-
-  block:
-    echo "Trying to send a huge identity name"
-    let resp = await client.sendCreateIdentity("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-    echo resp.code()
-    echo await resp.body()
-
-  block:
-    echo "Trying to send spaces as name"
-    let resp = await client.sendCreateIdentity("​")
-    echo resp.code()
-    echo await resp.body()
+  doBasic "Trying to send an empty identity name", client.sendCreateIdentity("")
+  doBasic "Trying to send a huge identity name", client.sendCreateIdentity("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+  doBasic "Trying to send spaces as name", client.sendCreateIdentity("​")
 
   let testIdentity = block:
     echo "Sending a unicode name"
@@ -161,13 +129,7 @@ proc main() {.async.} =
     echo body
     let payload = body.parseJson()
     payload["id"].getStr().IdentityId
-
-
-  block:
-    echo "Listing identities"
-    let resp = await client.sendListIdentities()
-    echo resp.code()
-    echo await resp.body()
+  doBasic "Listing identities", client.sendListIdentities()
 
   let communityId = block:
     echo "Creating a community"
@@ -177,12 +139,7 @@ proc main() {.async.} =
     echo body
     let payload = body.parseJson()
     payload["id"].getStr().CommunityId
-
-  block:
-    echo "Listing identities"
-    let resp = await client.sendListIdentities()
-    echo resp.code()
-    echo await resp.body()
+  doBasic "Listing identities", client.sendListIdentities()
 
   let channelId = block:
     echo "Creating a channel"
@@ -193,64 +150,19 @@ proc main() {.async.} =
     let payload = body.parseJson()
     payload["id"].getStr().ChannelId
 
-  block:
-    echo "Trying to create a channel as non owner"
-    let resp = await client.sendCreateChannel(communityId, otherIdentity, "test channel")
-    echo resp.code()
-    echo await resp.body()
+  doBasic "Trying to create a channel as non owner", client.sendCreateChannel(communityId, otherIdentity, "test channel")
 
-  block:
-    echo "Sending a message"
-    let resp = await client.sendChannelMessage(communityId, channelId, testIdentity, "Test message")
-    echo resp.code()
-    echo await resp.body()
+  doBasic "Sending a message", client.sendChannelMessage(communityId, channelId, testIdentity, "Test message")
 
-  block:
-    echo "Requesting latest messages from test channel"
-    let resp = await client.getLatestChannelMessages(communityId, channelId, testIdentity)
-    echo resp.code()
-    echo await resp.body()
+  doBasic "Requesting latest messages from test channel", client.getLatestChannelMessages(communityId, channelId, testIdentity)
+  doBasic "Requesting channel list", client.getChannels(communityId, testIdentity)
+  doBasic "Requesting members list", client.getMembers(communityId, testIdentity)
 
-  block:
-    echo "Requesting channel list"
-    let resp = await client.getChannels(communityId, testIdentity)
-    echo resp.code()
-    echo await resp.body()
+  doBasic "Attempting to delete an identity that owns communities", client.sendDeleteIdentity(testIdentity)
+  doBasic "Listing identities", client.sendListIdentities()
 
-  block:
-    echo "Requesting members list"
-    let resp = await client.getMembers(communityId, testIdentity)
-    echo resp.code()
-    echo await resp.body()
-
-  block:
-    echo "Attempting to delete an identity that owns communities"
-    let resp = await client.sendDeleteIdentity(testIdentity)
-    echo resp.code()
-    echo await resp.body()
-
-  block:
-    echo "Listing identities"
-    let resp = await client.sendListIdentities()
-    echo resp.code()
-    echo await resp.body()
-
-  block:
-    echo "Looking up own identity by id"
-    let resp = await client.lookupIdentityById(testIdentity)
-    echo resp.code()
-    echo await resp.body()
-
-  block:
-    echo "Looking up other identity by id"
-    let resp = await client.lookupIdentityById(otherIdentity)
-    echo resp.code()
-    echo await resp.body()
-
-  block:
-    echo "Looking up an identity that doesn't exist"
-    let resp = await client.lookupIdentityById(IdentityId("badid"))
-    echo resp.code()
-    echo await resp.body()
+  doBasic "Looking up own identity by id", client.lookupIdentityById(testIdentity)
+  doBasic "Looking up other identity by id", client.lookupIdentityById(otherIdentity)
+  doBasic "Looking up an identity that doesn't exist", client.lookupIdentityById(IdentityId("badid"))
 
 waitFor main()
