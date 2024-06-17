@@ -370,14 +370,29 @@ serve "127.0.0.1", 5000:
   delete "/community/{communityId:string}/channels/{channelId:string}/posts/{postdId:string}":
     discard
 
-  get "/community/{communityId:string}/members/":
+  get "/community/{communityId:string}/members":
     discard
 
   get "/community/{communityId:string}/members/{identityId:string}":
     discard
 
-  get "/community/{communityId:string}/channels/":
-    discard
+  get "/community/{communityId:string}/channels":
+    serverCtx.validateIdentity(headers).ifOk(identity, error):
+      identity.validateCommunity(communityId.cstring.parseOid().CommunityId).ifOk(community, error):
+        let channelsJArray = newJArray()
+        # TODO: Only list channels the identity is allowed to see
+        for channel in community.channels:
+          channelsJArray.add(%* {
+            "id": $channel.channelId.Oid,
+            "name": $channel.name,
+          })
+        return %* { "channels": channelsJArray }
+      do:
+        statusCode = error.statusCode
+        return error.message
+    do:
+      statusCode = error.statusCode
+      return error.message
 
   get "/community/{communityId:string}/channels/{channelId:string}/posts/latest":
     ## Get at most 20 most recent posts
