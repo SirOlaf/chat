@@ -17,6 +17,7 @@ type
   IdentityId = distinct string
   CommunityId = distinct string
   ChannelId = distinct string
+  InviteId = distinct string
 
 
 const baseAddr = "http://127.0.0.1:5000/"
@@ -64,6 +65,23 @@ proc getLatestChannelMessages(client: AsyncHttpClient, community: CommunityId, c
 
 proc lookupIdentityById(client: AsyncHttpClient, targetId: Identityid): Future[AsyncResponse] {.async.} =
   await client.get(baseAddr & "identity_info/" & targetId.string)
+
+proc sendCreatePublicInvite(client: AsyncHttpClient, community: CommunityId, identity: IdentityId): Future[AsyncResponse] {.async.} =
+  client.headers["Identity"] = identity.string
+  await client.post(
+    baseAddr & "community/" & community.string & "/create_public_invite",
+  )
+
+proc resolveInvite(client: AsyncHttpClient, invite: InviteId): Future[AsyncResponse] {.async.} =
+  await client.get(
+    baseAddr & "invite/" & invite.string & "/resolve"
+  )
+
+proc useInvite(client: AsyncHttpClient, invite: InviteId, identity: IdentityId): Future[AsyncResponse] {.async.} =
+  client.headers["Identity"] = identity.string
+  await client.post(
+    baseAddr & "invite/" & invite.string & "/use"
+  )
 
 
 
@@ -164,5 +182,43 @@ proc main() {.async.} =
   doBasic "Looking up own identity by id", client.lookupIdentityById(testIdentity)
   doBasic "Looking up other identity by id", client.lookupIdentityById(otherIdentity)
   doBasic "Looking up an identity that doesn't exist", client.lookupIdentityById(IdentityId("badid"))
+
+  let inviteId = block:
+    echo "Creating an invite"
+    let resp = await client.sendCreatePublicInvite(communityId, testIdentity)
+    echo resp.code()
+    let body = await resp.body()
+    echo body
+    let payload = body.parseJson()
+    payload["id"].getStr().InviteId
+
+  doBasic "Resolving the invite", client.resolveInvite(inviteId)
+
+  doBasic "Trying to use invite with the same account", client.useInvite(inviteId, otherIdentity)
+
+  let client2 = newAsyncHttpClient()
+  let loginToken2 = block:
+    let resp = await client.post(baseAddr & "register")
+    if resp.code().int != 200:
+      echo "Failed to register"
+      quit(1)
+    let body = (await resp.body()).parseJson()
+    echo "Got account id: ", body["id"].getStr()
+    body["token"].getStr()
+  echo "Registered another token: " & loginToken2
+  client2.headers["Authorization"] = loginToken2
+
+  let otherIdentity2 = block:
+    echo "Creating identity on other account: 'sirolaf'"
+    let resp = await client2.sendCreateIdentity("sirolaf")
+    echo resp.code()
+    let body = await resp.body()
+    echo body
+    let payload = body.parseJson()
+    payload["id"].getStr().IdentityId
+  doBasic "Using invite using other account", client2.useInvite(inviteId, otherIdentity2)
+
+  doBasic "Getting member list", client2.getMembers(communityId, otherIdentity2)
+
 
 waitFor main()

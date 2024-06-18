@@ -57,6 +57,12 @@ type
     owner: Identity
     members: seq[Identity]
     channels: seq[Channel]
+    activeInvites: Table[InviteId, Invite]
+
+  InviteId = distinct Oid
+  Invite = ref object
+    inviteId: InviteId
+    community: Community
 
   PermissionHandle = object
     ## For internal use to ensure proper use of api.
@@ -70,6 +76,7 @@ type
   ServerCtx = ref object
     registeredTokens: Table[AccountAuthToken, Account]
     communities: seq[Community]
+    activeInvites: Table[InviteId, Invite]
 
 
 # TODO: Make use of this once closure iterators are fixes, if ever
@@ -87,6 +94,9 @@ proc `$`(x: PublicName): string = x.string
 proc `==`(a, b: CommunityId): bool {.borrow.}
 
 proc `==`(a, b: ChannelId): bool {.borrow.}
+
+proc hash(x: InviteId): Hash {.borrow.}
+proc `==`(a, b: InviteId): bool {.borrow.}
 
 
 proc getErrUnauthorized(): ApiErr {.inline.} =
@@ -124,15 +134,21 @@ proc createAccount(server: ServerCtx): tuple[account: Account, token: AccountAut
   (account : account, token : token)
 
 proc createChannel(permissionHandle: sink PermissionHandle, community: Community, name: PublicName): Channel =
-  let channel = Channel(
+  result = Channel(
     channelId : genOid().ChannelId,
     name : name,
     posts : @[]
   )
   # FIXME: race condition
-  community.channels.add(channel)
-  channel
+  community.channels.add(result)
 
+proc createInvite(permissionHandle: sink PermissionHandle, server: ServerCtx, community: Community): Invite =
+  result = Invite(
+    inviteId : genOid().InviteId,
+    community : community,
+  )
+  server.activeInvites[result.inviteId] = result
+  community.activeInvites[result.inviteId] = result
 
 
 proc getAuthToken(headers: HttpHeaders): Result[AccountAuthToken, ApiErr] =
@@ -167,11 +183,26 @@ proc validateIdentity(server: ServerCtx, headers: HttpHeaders): Result[Identity,
     do:
       err error
 
+proc validateInvite(server: ServerCtx, account: Account, inviteId: InviteId): Result[Invite, ApiErr] =
+  if inviteId in server.activeInvites:
+    return ok server.activeInvites[inviteId]
+  errUnauthorized()
+
 proc validateCommunity(identity: Identity, communityId: CommunityId): Result[Community, ApiErr] =
   for community in identity.memberOf:
     if community.communityId == communityId:
       return ok community
   errUnauthorized()
+
+proc validateCommunityPublic(invite: Invite): Result[Community, ApiErr] =
+  # TODO: Return a public community handle that only has access to member count and community name
+  ok invite.community
+
+proc validateCommunity(invite: Invite, identity: Identity): Result[Community, ApiErr] =
+  for member in invite.community.members:
+    if member.sourceAccount == identity.sourceAccount:
+      return errBadData("User already has an identity in the community")
+  ok invite.community
 
 proc validateModerationPermissions(community: Community, identity: Identity): Result[PermissionHandle, ApiErr] =
   # TODO: Support for roles and actions once they are added
@@ -214,6 +245,13 @@ proc toJsonPublic(x: Identity): JsonNode =
     "name": $x.name,
   }
 
+proc toJsonPublic(x: Community): JsonNode =
+  %* {
+    "id": $x.communityId.Oid,
+    "name": $x.name,
+    "member_count": x.members.len(),
+  }
+
 
 # TODO: Validate json payload structurally
 
@@ -254,7 +292,7 @@ serve "127.0.0.1", 5000:
         # FIXME: race conditions
         identity.memberOf.add(community)
         serverCtx.communities.add(community)
-        return %* { "name": name.string, "id": $community.communityId.Oid, "owner": $identity.identityId.Oid }
+        return %* { "name": $community.name, "id": $community.communityId.Oid, "owner": $community.owner.identityId.Oid }
       do:
         statusCode = error.statusCode
         return error.message
@@ -340,6 +378,40 @@ serve "127.0.0.1", 5000:
       statusCode = error.statusCode
       return error.message
 
+  # TODO: Distinguish between public and targeted invites (internal, not exposed through endpoints)
+  get "/invite/{inviteId:string}/resolve":
+    serverCtx.validateAccount(headers).ifOk(account, error):
+      serverCtx.validateInvite(account, inviteId.cstring.parseOid().InviteId).ifOk(invite, error):
+        invite.validateCommunityPublic().ifOk(community, error):
+          return %* { "community": community.toJsonPublic() }
+        do:
+          statusCode = error.statusCode
+          return error.message
+      do:
+        statusCode = error.statusCode
+        return error.message
+    do:
+      statusCode = error.statusCode
+      return error.message
+
+  post "/invite/{inviteId:string}/use":
+    serverCtx.validateIdentity(headers).ifOk(identity, error):
+      serverCtx.validateInvite(identity.sourceAccount, inviteId.cstring.parseOid().InviteId).ifOk(invite, error):
+        invite.validateCommunity(identity).ifOk(community, error):
+          # FIXME: race condition
+          identity.memberOf.add(community)
+          community.members.add(identity)
+          return %* { "name": $community.name, "id": $community.communityId.Oid, "owner": $community.owner.identityId.Oid }
+        do:
+          statusCode = error.statusCode
+          return error.message
+      do:
+        statusCode = error.statusCode
+        return error.message
+    do:
+      statusCode = error.statusCode
+      return error.message
+
 
   # community
   post "/community/{communityId:string}/create_channel":
@@ -381,6 +453,22 @@ serve "127.0.0.1", 5000:
           )
           channel.posts.add(post)
           return post.toJson()
+        do:
+          statusCode = error.statusCode
+          return error.message
+      do:
+        statusCode = error.statusCode
+        return error.message
+    do:
+      statusCode = error.statusCode
+      return error.message
+
+  post "/community/{communityId:string}/create_public_invite":
+    serverCtx.validateIdentity(headers).ifOk(identity, error):
+      identity.validateCommunity(communityId.cstring.parseOid().CommunityId).ifOk(community, error):
+        community.validateModerationPermissions(identity).ifOk(permissionHandle, error):
+          let invite = permissionHandle.createInvite(serverCtx, community)
+          return %* { "id": $invite.inviteId.Oid }
         do:
           statusCode = error.statusCode
           return error.message
