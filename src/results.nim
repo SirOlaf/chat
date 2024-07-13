@@ -13,7 +13,7 @@ proc `$`*[V, E](x: Result[V, E]): string =
   else:
     "Ok(" & x.val.repr & ")"
 
-proc ok*[V, E](val: V): Result[V, E] {.inline.} =
+proc ok*[V, E](val: sink V): Result[V, E] {.inline.} =
   when V isnot void:
     Result[V, E](
       hasErr : false,

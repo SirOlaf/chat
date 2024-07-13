@@ -13,4 +13,4 @@ bin           = @["server"]
 
 requires "nim >= 2.1.1"
 
-requires "happyx >= 3.11.0"
+requires "happyx >= 4.3.0"

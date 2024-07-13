@@ -198,7 +198,7 @@ proc main() {.async.} =
 
   let client2 = newAsyncHttpClient()
   let loginToken2 = block:
-    let resp = await client.post(baseAddr & "register")
+    let resp = await client2.post(baseAddr & "register")
     if resp.code().int != 200:
       echo "Failed to register"
       quit(1)

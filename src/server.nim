@@ -79,9 +79,8 @@ type
     activeInvites: Table[InviteId, Invite]
 
 
-# TODO: Make use of this once closure iterators are fixes, if ever
 # Copying permissions is an error. They must be consumed
-#proc `=copy`*(a: var PermissionHandle, b: PermissionHandle) {.error.}
+proc `=copy`*(a: var PermissionHandle, b: PermissionHandle) {.error.}
 
 
 proc hash(x: AccountAuthToken): Hash {.borrow.}
